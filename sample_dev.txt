@@ -1,0 +1,41 @@
+	MpdEventHdr:
+2a502a50: SyncWord
+00000088: len:136
+0004c4fb: evNum:312571
+MpdDeviceHdr:
+080c6cb2
+d6000080
+MStreamHdr:
+0000007c
+TAI:
+613b53e0: Fri Sep 10 15:47:28 2021
+e4bc1b82: flag:2; ns:959383264
+00000018: TDC Block len:24
+204fbe5d: ev hdr evNum:1275
+4001318e: leading ch:0; t:78222
+304fb003: ev trl evNum:1275; words:3
+214fbe5d: ev hdr evNum:1275
+314fb002: ev trl evNum:1275; words:2
+70000000:
+10000054: ADC Block len:84; ch:0
+005000e5: len:40; ts:229
+d260d25c: 0 0
+d2c0d26c: 0 0
+d4b4d384: 0 0
+d8c0d688: 0 0
+de10db60: 0 0
+e31ce0ac: 0 0
+e774e568: 0 0
+eb28e968: 0 0
+ee44ecc4: 0 0
+f0d0ef9c: 0 0
+f300f1f4: 0 0
+f4c8f3e8: 0 0
+f638f588: 0 0
+f754f6d4: 0 0
+f854f7d0: 0 0
+f924f8c0: 0 0
+f9e8f984: 0 0
+fa94fa3c: 0 0
+faf4fac4: 0 0
+fb54fb1c: 0 0
