@@ -34,6 +34,7 @@ def iuint(x):
 
 
 def iusint(x): return struct.unpack('H', x)[0]
+def issint(x): return struct.unpack('h', x)[0]
 def iubint(x): return struct.unpack('B', x)[0]
 
 
@@ -41,8 +42,10 @@ def parseEventBlock(get):
     sword = iuint(get(4))
     swordDef = 0x2A502A50
     if sword != swordDef:
-        print("ERROR: Sync word does not match. Invalid format")
+        print("ERROR: Sync word does not match. Invalid format", hex(sword))
         sys.exit(2)
+    else:
+        print("TRACE: Sync word ok")
 
     payloadLength = iuint(get(4))
     print("DEBUG: payload length is ", payloadLength)
@@ -61,9 +64,8 @@ def parseDeviceEventBlock(get):
         f"DEBUG: reading Device Event Block from serial {hex(serial)}, ID:{hex(deviceID)}:{deviceID}, of size {hex(payloadLength)}:{payloadLength} bytes")
 
     endFilePointer = fle.tell() + payloadLength*4
-    while fle.tell() < endFilePointer:
-        parseMStreamBlock(get)
-    sys.exit(111)
+    # while fle.tell() < endFilePointer:
+    parseMStreamBlock(get)
 
 
 def parseMStreamBlock(get):
@@ -78,7 +80,7 @@ def parseMStreamBlock(get):
     print(
         f"DEBUG: subtype bits of MStream {hex(subtypeBits)}:{bin(subtypeBits)}. Payload size  {hex(payloadLengthWords)}:{payloadLengthWords} words, MStream subtype {mStreamSubtype}. ")
     parseMStreamPayload(get)
-    sys.exit()
+    # sys.exit()
 
 
 def parseInputCountersLowBits(data):
@@ -172,6 +174,17 @@ def parseError(data):
     return({"ERROR": err})
 
 
+def parseUndocumentedWords(w1, w2):
+    print("WARNING: adc block len and channel mask is likely a lie")
+    adcBlockLen = w1 & 0b11111111   # Watch it. I don't know exact mask
+    # Watch it. This is to be additionally fuzzed
+    channel = (w1 >> 8) & 0b11111
+    readingLen = w2 >> 17
+    # "timestamp":
+    shift = w2 & 0b1111111111111111  # Not too sure
+    return {"ADCBlockLen": adcBlockLen, "channel": channel, "rlen": readingLen, "ts": shift}
+
+
 def parseMStreamPayload(get):
     timeSeconds = iuint(get(4))
     timeNanosecondsUndFlag = iuint(get(4))
@@ -183,9 +196,11 @@ def parseMStreamPayload(get):
 
     anotherOne = True
     event = {}
+    i = 1
     while anotherOne:
         nxt = iuint(get(4))
         dtype = nxt >> 28
+        res = {}
         if dtype == 0:
             res = parseInputCountersHighBits(nxt)
         elif dtype == 1:
@@ -201,16 +216,28 @@ def parseMStreamPayload(get):
             # probably i will need another method call here. Watch it
             anotherOne = False
         elif dtype == 6:
-            res = parseError(data)
+            res = parseError(nxt)
+        elif nxt == 0x70000000:
+            res = parseUndocumentedWords(iuint(get(4)), iuint(get(4)))
+            anotherOne = False
+
+        else:
+            print("ERROR: found incompatible data word type ", dtype)
         # This means we have unintentionally reached the next record:
         if nxt == 0x2a502a50:
             print(
                 "WARNING: parser reached next data entry without finishing parsing of the previous one")
             anotherOne = False
             res = {}
+        print(i, hex(nxt), dtype, res)
+        i += 1
         event.update(res)
-    print ("Finished parsing this event", event)
-
+    if "rlen" in res:
+        data = []
+        for t in range(res["rlen"]):
+            data.append(issint(get(2)))
+            # watch it: is likely to fail when rlen is odd
+    print("Finished parsing this event", event, data)
 
 
 def parseMStreamPayload_not(get):
@@ -247,11 +274,15 @@ def parseMStreamPayload_not(get):
         # TODO
         pass
 
-    sys.exit()
-
 
 if __name__ == "__main__":
     print("WARNING: THIS CODE ONLY DOES THE FIRST EVENT PARSING FOR NOW")
     plength = parseEventBlock(getNext)
-    while fle.tell() < 12 + plength:
+    start = fle.tell()
+    end = start + 12 + plength
+    while fle.tell() < end:
         parseDeviceEventBlock(getNext)
+        print(f"pointer: {fle.tell()}, assert end: {end}")
+        plength = parseEventBlock(getNext)
+        start = fle.tell()
+        end = start + 12 + plength
