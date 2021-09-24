@@ -16,10 +16,15 @@ fle = open(fname, 'rb')
 
 getNext = fle.read
 
+wNum = 0
 
-def _getNext(x):
+
+def getNext(x):
+    global wNum
     i = fle.read(x)
-    print(i)
+    stro = ''
+    print(hex(wNum), ':', i.hex(" ", 1))
+    wNum += len(i)
     return i
 
 
@@ -68,19 +73,19 @@ def parseDeviceEventBlock(get):
     parseMStreamBlock(get)
 
 
+def parseMStreamBlock_not(get):
+    pass
+
+
 def parseMStreamBlock(get):
-    # print("TRACE: parsing mstream block")
+    print("TRACE: parsing mstream block")
     dense3bytes = iuint(get(3))
     subtypeBits = iubint(get(1))
     payloadLengthWords = dense3bytes >> 2
-    # print("ERROR: THIS CODE IS INVALID")
-    # payloadLengthWords = 49
     mStreamSubtype = dense3bytes & 0b11
-    # dataBlock = get(4*payloadLengthWords)
     print(
         f"DEBUG: subtype bits of MStream {hex(subtypeBits)}:{bin(subtypeBits)}. Payload size  {hex(payloadLengthWords)}:{payloadLengthWords} words, MStream subtype {mStreamSubtype}. ")
     parseMStreamPayload(get)
-    # sys.exit()
 
 
 def parseInputCountersLowBits(data):
@@ -176,20 +181,35 @@ def parseError(data):
 
 def parseUndocumentedWords(w1, w2):
     print("WARNING: adc block len and channel mask is likely a lie")
-    adcBlockLen = w1 & 0b11111111   # Watch it. I don't know exact mask
+    # 16 bits according to DataFormatTQDC16VSE webpage 'Data Block Format' section
+    dataPayloadLen = w1 & 0b1111111111111111
     # Watch it. This is to be additionally fuzzed
-    channel = (w1 >> 8) & 0b11111
-    readingLen = w2 >> 17
+    channel = (w1 >> 24) & 0b1111  # see DataFormatTQDC16VSE
+    dtype = w1 >> 28
+    readingLen = w2 >> 17  # is this an error on the DataFormatTQDC16VSE webpage in the ADC data block section? it definitely fails with >> 16 on our data
     # "timestamp":
     shift = w2 & 0b1111111111111111  # Not too sure
-    return {"ADCBlockLen": adcBlockLen, "channel": channel, "rlen": readingLen, "ts": shift}
+    # an awful workaround??
+    print("DEBUG: parsing undocumented ", hex(w1), hex(w2))
+    res = {"DataPayLen": dataPayloadLen, "channel": channel,
+           "rlen": readingLen, "ts": shift, "DataBlockDtype": dtype}
+    return res
+
+
+def getDataArray(get, length):
+    data = []
+    for t in range(length):
+        data.append(issint(get(2)))
+        # watch it: is likely to fail when rlen is odd
+    return data
 
 
 def parseMStreamPayload(get):
+    print("TRACE: parse MStream Payload")
     timeSeconds = iuint(get(4))
     timeNanosecondsUndFlag = iuint(get(4))
     flag = timeNanosecondsUndFlag & 0b11
-    timeNanoseconds = timeNanosecondsUndFlag >> 2
+    timeNanoseconds = timeNanosecondsUndFlag >> 2  # could be >> 1. Watch it
 
     tdcBlockLen = iuint(get(4))
     print(f"TAI: {hex(timeSeconds)}_{timeSeconds}.{timeNanoseconds}, flag {flag}, TDC block len: {tdcBlockLen}")
@@ -218,9 +238,21 @@ def parseMStreamPayload(get):
         elif dtype == 6:
             res = parseError(nxt)
         elif nxt == 0x70000000:
-            res = parseUndocumentedWords(iuint(get(4)), iuint(get(4)))
-            anotherOne = False
-
+            print("TRACE: Found magic 0x70000000")
+            (w1, w2) = (iuint(get(4)), iuint(get(4)))
+            while w1 != 0x2a502a50:
+                res = parseUndocumentedWords(w1, w2)
+                if res['rlen'] > 0:
+                    res['data'] = getDataArray(get, res['rlen'])
+                print("ACHTUNG: ", res)
+                (w1, w2) = (iuint(get(4)), iuint(get(4)))
+                if w1 == w2 == 0x0:  # EOF dude
+                    anotherOne = False
+                    break
+            else:
+                # Rewind pointer back to magic to progress with its unexpected discovery later
+                fle.seek(-8, 1)
+                anotherOne = False
         else:
             print("ERROR: found incompatible data word type ", dtype)
         # This means we have unintentionally reached the next record:
@@ -228,16 +260,13 @@ def parseMStreamPayload(get):
             print(
                 "WARNING: parser reached next data entry without finishing parsing of the previous one")
             anotherOne = False
-            res = {}
+            # rewind pointer to read 2a50 officially again further on route
+            fle.seek(-4, 1)
+
         print(i, hex(nxt), dtype, res)
         i += 1
         event.update(res)
-    if "rlen" in res:
-        data = []
-        for t in range(res["rlen"]):
-            data.append(issint(get(2)))
-            # watch it: is likely to fail when rlen is odd
-    print("Finished parsing this event", event, data)
+    print("Finished parsing this event", event)
 
 
 def parseMStreamPayload_not(get):
@@ -276,13 +305,16 @@ def parseMStreamPayload_not(get):
 
 
 if __name__ == "__main__":
-    print("WARNING: THIS CODE ONLY DOES THE FIRST EVENT PARSING FOR NOW")
     plength = parseEventBlock(getNext)
     start = fle.tell()
     end = start + 12 + plength
-    while fle.tell() < end:
-        parseDeviceEventBlock(getNext)
-        print(f"pointer: {fle.tell()}, assert end: {end}")
-        plength = parseEventBlock(getNext)
+    i = 1
+    # while fle.tell() < end:
+    while True:
         start = fle.tell()
+        parseDeviceEventBlock(getNext)
+        print("INFO: Event", i,
+              f"pointer: {fle.tell()}, assert end: {end}\n++++++++++++++++++++++++++++")
+        plength = parseEventBlock(getNext)
         end = start + 12 + plength
+        i += 1
